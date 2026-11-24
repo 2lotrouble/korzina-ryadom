@@ -49,7 +49,7 @@ jobs:
             node scripts/fetch-table.mjs --url "$SHEET" --id "$MONTH"
           fi
       - name: Найти координаты новых адресов
-        run: npm run data:geocode
+        run: node scripts/geocode.mjs --new-only
       - name: Собрать данные для сайта
         run: npm run data:build
       - run: npm test

@@ -2,6 +2,8 @@
 // Запуск: npm run data:geocode                      (все адреса; повторный запуск берёт готовое из кэша)
 //         node scripts/geocode.mjs --limit 30        (проба на первых 30 адресах)
 //         node scripts/geocode.mjs --provider photon (выбрать геокодер вручную: photon или nominatim)
+//         node scripts/geocode.mjs --new-only        (искать только адреса, которых ещё нет в data/geocoded.json:
+//                                                     так работает обновление на GitHub — быстро и без лишних запросов)
 //         node scripts/geocode.mjs --refine          (поискать заново и то, что найдено только до улицы;
 //                                                     результат заменяется, только если стал точнее)
 //
@@ -34,16 +36,34 @@ const arg = (name) => {
 }
 const LIMIT = arg('limit') ? Number(arg('limit')) : Infinity
 const REFINE = process.argv.includes('--refine')
+const NEW_ONLY = process.argv.includes('--new-only')
+/** после стольких сбоев подряд считаем, что геокодер недоступен, и больше его не ждём */
+const MAX_FAILURES_IN_A_ROW = 6
 const RANK = { house: 3, street: 2, city: 1 }
 
 const cache = fs.existsSync(CACHE_FILE) ? JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8')) : {}
 let requests = 0
 let failures = 0
+let failuresInRow = 0
+let down = false
 let dirty = 0
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 const norm = (s) => (s ?? '').toLowerCase().replace(/ё/g, 'е').trim()
 const saveCache = () => fs.writeFileSync(CACHE_FILE, JSON.stringify(cache))
+
+/**
+ * Очередь запросов: Nominatim просит не больше одного запроса в секунду, сколько бы потоков ни работало.
+ * У Photon такого правила нет — там каждый поток просто делает паузу.
+ */
+let nominatimTurn = Promise.resolve()
+function turn(providerName) {
+  const pause = PROVIDERS[providerName].pauseMs
+  if (providerName !== 'nominatim') return sleep(pause)
+  const mine = nominatimTurn.then(() => sleep(pause))
+  nominatimTurn = mine
+  return mine
+}
 
 /** Запрос к геокодеру с кэшем, паузой и повторами. Возвращает массив или null, если сервер недоступен. */
 async function request(providerName, params, normalize) {
@@ -51,23 +71,33 @@ async function request(providerName, params, normalize) {
   const query = new URLSearchParams(params).toString()
   const key = providerName === 'photon' ? query : `${providerName}:${query}`
   if (cache[key]) return cache[key]
+  if (down) return null
 
   for (let attempt = 1; ; attempt++) {
     try {
-      await sleep(provider.pauseMs)
+      await turn(providerName)
       const res = await fetch(`${provider.url}?${query}`, { headers: { 'User-Agent': USER_AGENT }, signal: AbortSignal.timeout(TIMEOUT_MS) })
       if (!res.ok) throw new Error(`HTTP ${res.status}`)
       const items = normalize(await res.json())
       cache[key] = items
       requests++
+      failuresInRow = 0
       if (++dirty >= 25) {
         saveCache()
         dirty = 0
       }
       return items
     } catch (err) {
-      if (attempt >= 3) {
+      if (attempt >= 3 || down) {
         failures++
+        if (++failuresInRow >= MAX_FAILURES_IN_A_ROW && !down) {
+          down = true
+          console.warn(
+            providerName === 'photon' && !arg('provider')
+              ? '  ! Photon не отвечает.'
+              : '  ! Геокодер не отвечает. Оставшиеся адреса пока останутся без точных координат — запустите поиск ещё раз позже.',
+          )
+        }
         if (failures <= 20) console.warn(`  ! нет ответа (${err.message}): ${query.slice(0, 80)}`)
         return null
       }
@@ -345,20 +375,33 @@ const regionByCity = new Map()
 for (const { address } of parsed) if (address.region && address.city) regionByCity.set(norm(address.city), address.region)
 for (const { address } of parsed) if (!address.region && address.city) address.region = regionByCity.get(norm(address.city)) ?? null
 
-const providerName = await chooseProvider()
-const findStore = providerName === 'photon' ? photonStore : nominatimStore
+let providerName = await chooseProvider()
+let findStore = providerName === 'photon' ? photonStore : nominatimStore
 console.log(`Адресов: ${parsed.length}. Геокодер: ${providerName}.`)
 
 // уже найденное с точностью до дома или улицы не ищем заново — так можно докручивать результат несколькими запусками
 const out = fs.existsSync(OUT_FILE) ? JSON.parse(fs.readFileSync(OUT_FILE, 'utf8')) : {}
-const todo = parsed.filter(({ raw }) => !out[raw] || out[raw].precision === 'city' || (REFINE && out[raw].precision === 'street'))
+const todo = parsed.filter(({ raw }) => !out[raw] || (!NEW_ONLY && (out[raw].precision === 'city' || (REFINE && out[raw].precision === 'street'))))
 const stat = { house: 0, street: 0, city: 0, none: 0 }
 const write = () => fs.writeFileSync(OUT_FILE, JSON.stringify(out, null, 1))
 console.log(`Уже найдено точно: ${parsed.length - todo.length}, осталось: ${todo.length}.`)
 
 let done = 0
 await pool(todo, PROVIDERS[providerName].workers, async ({ raw, address }) => {
-  const hit = await findStore(address)
+  const startedWith = findStore
+  let hit = await startedWith(address)
+  if (down && providerName === 'photon' && !arg('provider')) {
+    // Photon прошёл проверку связи, но перестал отвечать: продолжаем на запасном геокодере
+    console.warn('  Перехожу на запасной геокодер Nominatim.')
+    providerName = 'nominatim'
+    findStore = nominatimStore
+    down = false
+    failuresInRow = 0
+  }
+  // этот адрес начинали искать на отвалившемся геокодере — ищем заново на запасном
+  if (startedWith !== findStore) hit = await findStore(address)
+  // геокодер отвалился посреди поиска: неточный ответ не сохраняем, чтобы адрес нашёлся при следующем запуске
+  if (down && hit?.precision !== 'house') hit = null
   // дом, найденный в стороне от уже известной улицы, — скорее всего тёзка из соседнего посёлка
   const farFromStreet = hit && out[raw]?.precision === 'street' && distanceKm(hit, out[raw]) > 8
   if (hit && !farFromStreet && (!out[raw] || RANK[hit.precision] > RANK[out[raw].precision])) {
