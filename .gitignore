@@ -4,3 +4,6 @@ dist
 .DS_Store
 CLAUDE.md
 .claude/
+notes/
+*.zip
+data/geocache.json

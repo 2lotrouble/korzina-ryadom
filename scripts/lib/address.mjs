@@ -42,13 +42,17 @@ const SETTLEMENT_TYPES = {
   'сл.': ['сл.', 'слобода'],
   'х.': ['х.', 'хутор'],
   'нп.': ['', ''],
+  'сп.': ['', ''],
   'г-к': ['', ''],
 }
 
+/** слово, которое дописывается после названия: «Перекопский военный г-к» → «Перекопский военный городок» */
+const SETTLEMENT_POSTFIX = { 'г-к': 'городок' }
+
 const FEDERAL_CITIES = ['москва', 'санкт-петербург', 'севастополь']
 const SMALL_WORDS = new Set(['на', 'по', 'де', 'лет', 'и', 'им.', 'имени'])
-const HOUSE_RE = /^(дом|здание|строение|владение|домовладение|сооружение|д\.)\s*(\S.*)$/i
-const BARE_HOUSE_RE = /^\d+\s*[а-яё]?(\s*[/-]\s*\d*\s*[а-яё]?)?$/i
+const HOUSE_RE = /^(домовладение|дом|здание|строение|владение|сооружение|д\.)\s*(\S.*)$/i
+const BARE_HOUSE_RE = /^\d+\s*[а-яё]?(\s*[/-]\s*\d*\s*[а-яё]?)?(\s*(к|корп\.?|литера?)\s*[\dа-яё]+)?$/i
 const ADJECTIVE_RE = /(ая|яя|ий|ый|ой|ое|ее|ья|ье|ьи)$/i
 
 const squash = (s) => s.replace(/\s+/g, ' ').trim()
@@ -75,23 +79,28 @@ function splitSuffix(token) {
 }
 
 function prettyRegion(token) {
-  let t = token.replace(/\s+-\s+.*$/, '') // «чувашская республика - чувашия» → «чувашская республика»
-  t = titleCase(squash(t))
+  // «Северная Осетия - Алания респ.» → «Северная Осетия респ.», «кемеровская область - кузбасс обл» → «кемеровская область»
+  let t = squash(token.replace(/\s+-\s+\S+/, ''))
+  t = t.replace(/(область|республика)\s+(обл\.?|респ\.?)$/i, '$1')
+  t = titleCase(t)
   let m
   if ((m = t.match(/^(.+?)\s+(обл\.?|область)$/i))) return `${m[1]} область`
   if ((m = t.match(/^(.+?)\s+(респ\.?|республика)$/i))) return ADJECTIVE_RE.test(m[1]) ? `${m[1]} Республика` : `Республика ${m[1]}`
-  if ((m = t.match(/^(.+?)\s+а\.окр\.$/i))) return `${m[1]} АО`
+  if ((m = t.match(/^(.+?)\s+(а\.окр\.|автономный округ|ао)$/i))) return `${m[1].replace(/\s+автономный округ$/i, '')} АО`
   if ((m = t.match(/^(.+?)\s+а\.обл\.$/i))) return `${m[1]} автономная область`
+  if ((m = t.match(/^(.+?)\s+край$/i))) return `${m[1]} край`
   return t
 }
 
-const isRegion = (token) => /(^|\s)(обл\.?|область|край|респ\.?|республика|а\.окр\.|а\.обл\.)(\s|$)/i.test(token)
+const isRegion = (token) => /(^|\s)(обл\.?|область|край|респ\.?|республика|а\.окр\.|а\.обл\.|автономный округ)(\s|$)/i.test(token)
 
 function cleanHouse(value) {
   return squash(value)
+    .replace(/\s*литера?\s*([а-яё])$/i, '$1')
+    .replace(/(\d[а-яё]?)\s*(?:к|корп\.?)\s*(\d+)$/i, '$1 к$2')
     .replace(/\s*([/-])\s*/g, '$1')
     .replace(/(\d)\s+([а-яё])$/i, '$1$2')
-    .replace(/[а-яё]+$/i, (letters) => (letters.length === 1 ? letters.toUpperCase() : letters))
+    .replace(/(\d)([а-яё])(?= |$)/i, (_, d, letter) => d + letter.toUpperCase())
 }
 
 /**
@@ -99,7 +108,7 @@ function cleanHouse(value) {
  * @returns {{
  *   postcode: string|null, region: string|null, district: string|null,
  *   city: string|null, cityFull: string|null, locality: string|null,
- *   street: string|null, streetFull: string|null, house: string|null, houseBase: string|null,
+ *   street: string|null, streetFull: string|null, streetName: string|null, streetType: string|null, house: string|null, houseBase: string|null,
  *   pretty: string, isFederalCity: boolean
  * }}
  */
@@ -114,6 +123,8 @@ export function parseAddress(raw) {
     locality: null,
     street: null,
     streetFull: null,
+    streetName: null,
+    streetType: null,
     house: null,
     houseBase: null,
     pretty: '',
@@ -134,12 +145,19 @@ export function parseAddress(raw) {
       if (parts.length) {
         for (const [, kind, value] of parts) {
           const k = lower(kind)
-          out.house += k.startsWith('корп') ? ` к${value}` : k.startsWith('стр') ? ` с${value}` : value.toUpperCase()
+          if (k.startsWith('корп')) {
+            if (!/ к\S+/.test(out.house)) out.house += ` к${value}`
+          } else if (k.startsWith('стр')) {
+            if (!/ с\S+/.test(out.house)) out.house += ` с${value}`
+          } else if (/^\d+$/.test(out.house) && /^[а-яё]$/i.test(value)) {
+            out.house += value.toUpperCase()
+            out.houseBase = out.house
+          }
         }
         lastWasHouse = false
         continue
       }
-      if (lastWasHouse && /^[а-яё]$/i.test(token)) {
+      if (lastWasHouse && /^\d+$/.test(out.house) && /^[а-яё]$/i.test(token)) {
         out.house += token.toUpperCase()
         out.houseBase = out.house
         lastWasHouse = false
@@ -155,6 +173,23 @@ export function parseAddress(raw) {
       lastWasHouse = true
       const tail = [...house[2].matchAll(/(корпус|строение)\s*([\dа-яё]+)/gi)]
       for (const [, kind, value] of tail) out.house += lower(kind).startsWith('корп') ? ` к${value}` : ` с${value}`
+      continue
+    }
+
+    // редкая запись с типом впереди: «г.Улан-Удэ», «у.Гагарина 24»
+    const cityFirst = token.match(/^г\.\s*(\S.*)$/i)
+    if (cityFirst && !out.city) {
+      out.city = titleCase(cityFirst[1])
+      out.cityFull = out.city
+      continue
+    }
+    const streetFirst = token.match(/^(?:ул?\.)\s*(\S.*?)\s+(\d+\S*)$/i)
+    if (streetFirst && out.city && !out.street) {
+      out.street = `ул. ${titleCase(streetFirst[1])}`
+      out.streetFull = `улица ${titleCase(streetFirst[1])}`
+      out.house = cleanHouse(streetFirst[2])
+      out.houseBase = out.house
+      lastWasHouse = true
       continue
     }
 
@@ -180,7 +215,8 @@ export function parseAddress(raw) {
 
     if (suffix && SETTLEMENT_TYPES[suffix.type] && !out.street) {
       const [prefix, word] = SETTLEMENT_TYPES[suffix.type]
-      const name = titleCase(suffix.name)
+      const postfix = SETTLEMENT_POSTFIX[suffix.type]
+      const name = titleCase(suffix.name) + (postfix ? ` ${postfix}` : '')
       const label = prefix ? `${prefix} ${name}` : name
       if (!out.city) {
         out.city = label
@@ -206,12 +242,20 @@ export function parseAddress(raw) {
       const nameFirst = ADJECTIVE_RE.test(street.name.split(' ').pop()) || /^\d+-/.test(street.name)
       const pretty = !short ? street.name : nameFirst ? `${street.name} ${short}` : `${short} ${street.name}`
       const prettyFull = !full ? street.name : nameFirst ? `${street.name} ${full}` : `${full} ${street.name}`
+      const isArea = ['микрорайон', 'квартал', ''].includes(full)
+      if (out.street && isArea) {
+        // «Маяковского ул., Железнодорожный мкр.» — улица уже есть, микрорайон только уточняет
+        area = pretty
+        continue
+      }
       if (out.street) {
         // «Железнодорожный мкр., Ленина ул.» — первое становится уточнением, второе улицей
         area = out.street
       }
       out.street = pretty
       out.streetFull = prettyFull
+      out.streetName = street.name
+      out.streetType = full || null
       continue
     }
 
@@ -219,6 +263,14 @@ export function parseAddress(raw) {
       out.house = cleanHouse(token)
       out.houseBase = out.house
       lastWasHouse = true
+      continue
+    }
+
+    if (out.locality && !out.street && /^\d+[а-яё]?$/i.test(token)) {
+      // Зеленоград: вместо улицы и дома — номер корпуса
+      out.house = `корп. ${token}`
+      out.houseBase = token
+      lastWasHouse = false
       continue
     }
 

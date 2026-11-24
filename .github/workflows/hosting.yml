@@ -1,0 +1,33 @@
+# Выкладывает собранный сайт на обычный хостинг по FTP (например, Timeweb).
+# Запускается вручную: вкладка Actions → «Сайт на хостинг» → Run workflow.
+# Адрес, логин и пароль хранятся в секретах репозитория (Settings → Secrets and variables → Actions):
+#   FTP_SERVER, FTP_USERNAME, FTP_PASSWORD. В код они не попадают.
+name: Сайт на хостинг
+
+on:
+  workflow_dispatch:
+    inputs:
+      folder:
+        description: Папка сайта на хостинге
+        default: public_html/
+        required: true
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run data:build
+      - run: npm run build
+      - uses: SamKirkland/FTP-Deploy-Action@v4.3.5
+        with:
+          server: ${{ secrets.FTP_SERVER }}
+          username: ${{ secrets.FTP_USERNAME }}
+          password: ${{ secrets.FTP_PASSWORD }}
+          local-dir: dist/
+          server-dir: ${{ inputs.folder }}
