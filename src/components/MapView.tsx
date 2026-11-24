@@ -1,6 +1,8 @@
 import L from 'leaflet'
+import { addBaseLayer } from '../lib/tiles'
 import { useEffect, useRef } from 'react'
-import { CHAIN_NAME, type ChainCode, type LatLon, type Store } from '../lib/data'
+import { clusterDots } from '../lib/cluster'
+import { CHAIN_NAME, plural, type ChainCode, type LatLon, type Store } from '../lib/data'
 import type { StatusKind } from '../lib/time'
 
 export interface MapFocus {
@@ -50,9 +52,17 @@ function markerStyle(store: Store, kind: StatusKind, selected: boolean): L.Circl
   }
 }
 
-function bubbleIcon(n: number): L.DivIcon {
-  const size = Math.round(Math.min(58, 26 + Math.sqrt(n) * 5))
-  return L.divIcon({ className: '', html: `<span class="bubble" style="--size:${size}px">${n}</span>`, iconSize: [size, size], iconAnchor: [size / 2, size / 2] })
+/** на таком расстоянии (в пикселях экрана) города сливаются в один кружок */
+const CLUSTER_RADIUS = 46
+
+function bubbleIcon(n: number, group: boolean): L.DivIcon {
+  const size = Math.round(Math.min(64, 26 + Math.sqrt(n) * 4))
+  return L.divIcon({
+    className: '',
+    html: `<span class="bubble ${group ? 'bubble--group' : ''}" style="--size:${size}px">${n}</span>`,
+    iconSize: [size, size],
+    iconAnchor: [size / 2, size / 2],
+  })
 }
 
 export function MapView({ stores, cities, statusOf, selectedId, onSelect, onCity, user, focus }: Props) {
@@ -72,11 +82,23 @@ export function MapView({ stores, cities, statusOf, selectedId, onSelect, onCity
     group.clearLayers()
     markers.current.clear()
 
+    const m = map.current
+    if (!m) return
     if (mode.current === 'cities') {
-      for (const city of cities) {
-        if (!city.n) continue
-        L.marker([city.lat, city.lon], { icon: bubbleIcon(city.n), title: `${city.name}: ${city.n}`, keyboard: false })
-          .on('click', () => latest.current.onCity(city.index))
+      const zoom = m.getZoom()
+      const dots = cities.filter((city) => city.n).map((city) => ({ ...m.project([city.lat, city.lon], zoom), n: city.n, city }))
+      for (const cluster of clusterDots(dots, CLUSTER_RADIUS)) {
+        const main = cluster.items[0].city
+        const others = cluster.items.length - 1
+        const count = `${cluster.n} ${plural(cluster.n, ['магазин', 'магазина', 'магазинов'])}`
+        const title = others ? `${main.name} и ещё ${others} ${plural(others, ['город', 'города', 'городов'])} рядом: ${count}` : `${main.name}: ${count}`
+        L.marker([main.lat, main.lon], { icon: bubbleIcon(cluster.n, others > 0), title, keyboard: false })
+          .on('click', () => {
+            if (!others) return latest.current.onCity(main.index)
+            // группа городов: приближаемся так, чтобы она распалась на отдельные города
+            const bounds = L.latLngBounds(cluster.items.map((x) => [x.city.lat, x.city.lon] as [number, number]))
+            m.flyTo(bounds.getCenter(), Math.max(zoom + 1, Math.min(m.getBoundsZoom(bounds, false, L.point(80, 80)), STORE_ZOOM)), { duration: 0.5 })
+          })
           .addTo(group)
       }
       return
@@ -99,16 +121,13 @@ export function MapView({ stores, cities, statusOf, selectedId, onSelect, onCity
     m.on('click', () => m.scrollWheelZoom.enable())
     m.on('mouseout', () => m.scrollWheelZoom.disable())
     m.fitBounds(RUSSIA)
-    L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-      maxZoom: 19,
-      attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noreferrer">участники OpenStreetMap</a>',
-    }).addTo(m)
-    m.attributionControl.setPrefix(false)
+    addBaseLayer(m)
     layer.current = L.layerGroup().addTo(m)
     userLayer.current = L.layerGroup().addTo(m)
     m.on('zoomend', () => {
       const next = m.getZoom() >= STORE_ZOOM ? 'stores' : 'cities'
-      if (next !== mode.current) {
+      // кружки городов зависят от масштаба: при каждом приближении группы распадаются
+      if (next !== mode.current || next === 'cities') {
         mode.current = next
         draw()
       }

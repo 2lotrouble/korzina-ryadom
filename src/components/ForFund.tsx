@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import type { Campaign } from '../lib/data'
+import { plural, type Campaign } from '../lib/data'
 
 const REPO = 'https://github.com/2lotrouble/korzina-ryadom'
 
@@ -13,6 +13,7 @@ function embedCode(): string {
 export function ForFund({ campaign }: { campaign: Campaign }) {
   const { stats } = campaign
   const exact = Math.round(((stats.house + stats.street) / stats.total) * 100)
+  const approximate = stats.city + stats.none
   const [copied, setCopied] = useState(false)
   const code = embedCode()
 
@@ -32,7 +33,7 @@ export function ForFund({ campaign }: { campaign: Campaign }) {
         <h2>Для фонда: как обновить сайт к следующей акции</h2>
         <p>
           Сайт собран из той же таблицы, которую фонд публикует перед акцией. Сервера и базы данных нет: это набор файлов, который можно выложить на любой хостинг или встроить
-          в сайт акции.
+          в сайт акции. Обновление к новой акции занимает несколько минут.
         </p>
       </div>
 
@@ -44,15 +45,24 @@ export function ForFund({ campaign }: { campaign: Campaign }) {
           </span>
         </li>
         <li>
-          <b>Запустить одну команду</b>
+          <b>Нажать одну кнопку</b>
           <span>
-            <code>npm run data</code> разберёт адреса и время и найдёт координаты. Уже найденные адреса берутся из кэша, новые ищутся в открытых данных OpenStreetMap.
+            На GitHub:{' '}
+            <a href={`${REPO}/actions/workflows/update.yml`} target="_blank" rel="noreferrer">
+              Actions → «Новая таблица акции»
+            </a>
+            . Вставьте ссылку на таблицу и месяц акции — сайт сам скачает её, найдёт координаты новых адресов и опубликуется. Программист не нужен.
           </span>
         </li>
         <li>
-          <b>Выложить</b>
+          <b>Поправить точки, если нужно</b>
           <span>
-            <code>npm run build</code> собирает готовую папку с файлами. Её можно положить на любой хостинг.
+            {approximate > 0 ? (
+              <>
+                {approximate} {plural(approximate, ['магазин найден', 'магазина найдены', 'магазинов найдены'])} только до города.{' '}
+              </>
+            ) : null}
+            На странице <a href="?view=points">«Точки на карте»</a> их можно поставить на место кликом. Правка сохранится и для следующих акций.
           </span>
         </li>
       </ol>
@@ -90,7 +100,7 @@ export function ForFund({ campaign }: { campaign: Campaign }) {
         </div>
         <div className="tool">
           <h3>Плакат с QR-кодом</h3>
-          <p>Листовка на A4 для входа в магазин. У каждого магазина своя: с адресом, часами работы волонтёров и QR-кодом. Кнопка «Плакат» есть в карточке магазина.</p>
+          <p>Листовка на A4 для входа в магазин. У каждого магазина своя: с адресом, часами работы волонтёров и QR-кодом. Кнопка с QR-кодом есть в карточке каждого магазина.</p>
           <div className="tool__actions">
             <a className="button button--small" href="?view=poster">
               Общий плакат акции
@@ -98,8 +108,11 @@ export function ForFund({ campaign }: { campaign: Campaign }) {
           </div>
         </div>
         <div className="tool">
-          <h3>Ссылка на город</h3>
-          <p>Региональные партнёры могут дать ссылку сразу на свои магазины: кнопка «Ссылка на город» над списком.</p>
+          <h3>Ссылка и готовый пост для города</h3>
+          <p>
+            Региональные партнёры могут дать ссылку сразу на свои магазины и скопировать готовое объявление с адресами и временем: кнопки «Ссылка на город» и «Текст для
+            поста» над списком.
+          </p>
           <div className="tool__actions">
             <a className="button button--small" href="?city=Рязань">
               Пример: Рязань

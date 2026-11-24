@@ -8,11 +8,18 @@ import { readStoreRows } from './lib/csv.mjs'
 import { parseAddress, cityKey } from './lib/address.mjs'
 import { parseSlots } from './lib/slots.mjs'
 import { hashId } from './lib/id.mjs'
+import { parseOverrides } from './lib/overrides.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const config = JSON.parse(fs.readFileSync(path.join(ROOT, 'data/campaign.config.json'), 'utf8'))
 const geocodedFile = path.join(ROOT, 'data/geocoded.json')
 const geocoded = fs.existsSync(geocodedFile) ? JSON.parse(fs.readFileSync(geocodedFile, 'utf8')) : {}
+// точки, поставленные вручную на странице «Точки на карте»: адрес из таблицы → [широта, долгота]
+const overrides = parseOverrides(readJson(path.join(ROOT, 'data/overrides.json')))
+
+function readJson(file) {
+  return fs.existsSync(file) ? JSON.parse(fs.readFileSync(file, 'utf8')) : {}
+}
 
 const norm = (s) => (s ?? '').toLowerCase().replace(/ё/g, 'е').trim()
 
@@ -46,7 +53,8 @@ for (const { row, address } of parsed) {
     stats.noTime++
   }
 
-  const geo = geocoded[row.address] ? { ...geocoded[row.address] } : undefined
+  const manual = overrides.get(row.address)
+  const geo = manual ? { lat: manual[0], lon: manual[1], precision: 'house', manual: true } : geocoded[row.address] ? { ...geocoded[row.address] } : undefined
   city.federal = address.isFederalCity
   if (geo && geo.precision !== 'city') city.points.push(geo)
   if (geo?.precision === 'city') city.center = { lat: geo.lat, lon: geo.lon }
@@ -83,7 +91,8 @@ for (const city of cities.values()) {
   const middle = { lat: median(city.points.map((p) => p.lat)), lon: median(city.points.map((p) => p.lon)) }
   const limit = city.federal ? 70 : 35
   for (const point of city.points) {
-    if (distanceKm(middle, point) <= limit) continue
+    // точку, поставленную человеком, не перепроверяем
+    if (point.manual || distanceKm(middle, point) <= limit) continue
     point.lat = middle.lat
     point.lon = middle.lon
     point.precision = 'city'
@@ -93,6 +102,8 @@ for (const city of cities.values()) {
   city.center ??= middle
 }
 for (const s of stores) stats[s.geo?.precision ?? 'none']++
+stats.manual = stores.filter((s) => s.geo?.manual).length
+const unknownOverrides = [...overrides.keys()].filter((raw) => !rows.some((row) => row.address === raw))
 
 // центр города: среднее по точно найденным магазинам, иначе то, что вернул геокодер
 const cityList = [...cities.entries()]
@@ -126,6 +137,10 @@ const outStores = stores.map((s) => {
     out.lat = s.geo.lat
     out.lon = s.geo.lon
     out.pr = s.geo.precision === 'house' ? 'h' : 's'
+    if (s.geo.manual) {
+      out.m = 1
+      out.raw = s.raw
+    }
   }
   return out
 })
@@ -154,6 +169,8 @@ fs.copyFileSync(path.join(ROOT, config.csv), path.join(ROOT, 'public/data/table.
 
 console.log(`Магазинов: ${stats.total}, городов: ${cityList.length}, дни акции: ${dates.join(', ')}`)
 console.log(`Координаты: до дома ${stats.house}, до улицы ${stats.street}, до города ${stats.city}, не найдено ${stats.none}`)
+if (stats.manual) console.log(`Поставлено вручную (data/overrides.json): ${stats.manual}`)
+for (const raw of unknownOverrides) console.log(`  ! в data/overrides.json есть адрес, которого нет в таблице: ${raw}`)
 console.log(`Без времени: ${stats.noTime}, с непонятной датой: ${stats.noSlots}, перенесено в центр города как сомнительные: ${stats.moved}`)
 for (const p of problems) console.log('  ! ' + p)
 console.log(`Записано: ${path.relative(ROOT, outFile)} (${Math.round(fs.statSync(outFile).size / 1024)} КБ)`)

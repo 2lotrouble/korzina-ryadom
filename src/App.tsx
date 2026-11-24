@@ -3,6 +3,8 @@ import { Basket } from './components/Basket'
 import { Check } from './components/Check'
 import { Finder } from './components/Finder'
 import { ForFund } from './components/ForFund'
+import { HeroArt } from './components/HeroArt'
+import { Points } from './components/Points'
 import { Poster } from './components/Poster'
 import { Stats } from './components/Stats'
 import { Why } from './components/Why'
@@ -22,11 +24,12 @@ export function App() {
   const params = new URLSearchParams(location.search)
   const view = params.get('view')
 
-  if (view === 'poster' || view === 'check' || view === 'embed') {
+  if (view === 'poster' || view === 'check' || view === 'embed' || view === 'points') {
     if (error) return <p className="hint hint--warn hint--center">{error}</p>
     if (!data) return <p className="hint hint--center">Загружаю список магазинов…</p>
     if (view === 'poster') return <Poster data={data} store={data.stores.find((s) => s.id === params.get('store')) ?? null} />
     if (view === 'check') return <Check data={data} />
+    if (view === 'points') return <Points data={data} />
     return (
       <div className="embed">
         <Finder data={data} now={now} phase={phase} />
@@ -44,7 +47,7 @@ export function App() {
     <>
       <header className="top">
         <a className="logo" href="#find">
-          <span aria-hidden>🧺</span> Корзина рядом
+          <img src={`${import.meta.env.BASE_URL}favicon.svg`} alt="" width="28" height="28" /> Корзина рядом
         </a>
         <nav>
           <a href="#find">Найти магазин</a>
@@ -56,39 +59,42 @@ export function App() {
 
       <main>
         <section className="hero">
-          <p className="hero__eyebrow">Акция «Корзина доброты» в «Пятёрочке» и «Перекрёстке»</p>
-          <h1>Купите на одну пачку больше — и отдайте волонтёрам</h1>
-          <p className="hero__lead">
-            В дни акции волонтёры собирают в магазинах продукты для пожилых людей и семей с детьми, которым сейчас непросто. Найдите магазин рядом, узнайте, когда там
-            волонтёры и что лучше купить.
-          </p>
-          <ol className="hero__steps">
-            <li>
-              <b>1</b> Найдите магазин
-            </li>
-            <li>
-              <b>2</b> Купите продукты
-            </li>
-            <li>
-              <b>3</b> Отдайте волонтёрам у выхода
-            </li>
-          </ol>
-          {data && (
-            <dl className="hero__numbers">
-              <div>
-                <dt>{data.campaign.stats.total.toLocaleString('ru')}</dt>
-                <dd>{plural(data.campaign.stats.total, ['магазин', 'магазина', 'магазинов'])} акции</dd>
-              </div>
-              <div>
-                <dt>{data.cities.length}</dt>
-                <dd>{plural(data.cities.length, ['город', 'города', 'городов и посёлков'])}</dd>
-              </div>
-              <div>
-                <dt>{formatRange(data.campaign.dates)}</dt>
-                <dd>{data.campaign.year} года</dd>
-              </div>
-            </dl>
-          )}
+          <div className="hero__text">
+            <p className="hero__eyebrow">Акция «Корзина доброты» в «Пятёрочке» и «Перекрёстке»</p>
+            <h1>Купите на одну пачку больше — и отдайте волонтёрам</h1>
+            <p className="hero__lead">
+              В дни акции волонтёры собирают в магазинах продукты для пожилых людей и семей с детьми, которым сейчас непросто. Найдите магазин рядом, узнайте, когда там волонтёры и
+              что лучше купить.
+            </p>
+            <ol className="hero__steps">
+              <li>
+                <b>1</b> Найдите магазин
+              </li>
+              <li>
+                <b>2</b> Купите продукты
+              </li>
+              <li>
+                <b>3</b> Отдайте волонтёрам у выхода
+              </li>
+            </ol>
+            {data && (
+              <dl className="hero__numbers">
+                <div>
+                  <dt>{data.campaign.stats.total.toLocaleString('ru')}</dt>
+                  <dd>{plural(data.campaign.stats.total, ['магазин', 'магазина', 'магазинов'])} акции</dd>
+                </div>
+                <div>
+                  <dt>{data.cities.length}</dt>
+                  <dd>{plural(data.cities.length, ['город', 'города', 'городов и посёлков'])}</dd>
+                </div>
+                <div>
+                  <dt>{formatRange(data.campaign.dates)}</dt>
+                  <dd>{data.campaign.year} года</dd>
+                </div>
+              </dl>
+            )}
+          </div>
+          <HeroArt className="hero__art" />
           {data && <PhaseBanner data={data} now={now} phase={phase} />}
         </section>
 

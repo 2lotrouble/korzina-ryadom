@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { CHAIN_NAME, distanceKm, formatDistance, hasPoint, norm, plural, type ChainCode, type Data, type LatLon, type Store } from '../lib/data'
 import { buildIcs, downloadFile, routeUrl, share, storeUrl } from '../lib/links'
 import { findPlace } from '../lib/place'
+import { cityPost } from '../lib/post'
 import { dayOfMonth, formatDate, formatSlotTime, monthName, storeStatus, weekdayShort, type Now, type Phase } from '../lib/time'
 import { CHAIN_COLOR, MapView, STORE_ZOOM, type CityBubble, type MapFocus } from './MapView'
 
@@ -203,20 +204,24 @@ export function Finder({ data, now, phase }: Props) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  async function copyCityLink() {
-    if (cityIndex === null) return
-    const url = new URL(location.href)
-    url.hash = ''
-    url.search = ''
-    url.searchParams.set('city', cities[cityIndex].name)
+  /** ссылка на город с читаемым названием: в посте «?city=Рязань» выглядит лучше, чем набор процентов */
+  const cityUrl = () => `${location.origin}${location.pathname}?city=${cities[cityIndex!].name.replace(/ /g, '%20')}`
+
+  async function copyForCity(text: string, done: string) {
     try {
-      await navigator.clipboard.writeText(url.toString())
-      setLinkNote('Ссылка скопирована')
+      await navigator.clipboard.writeText(text)
+      setLinkNote(done)
     } catch {
-      setLinkNote(url.toString())
+      setLinkNote('Не получилось скопировать')
     }
     setTimeout(() => setLinkNote(''), 3000)
   }
+
+  const copyCityLink = () => cityIndex !== null && copyForCity(cityUrl(), 'Ссылка скопирована')
+  /** готовое объявление для городского паблика: адреса, время и ссылка на карту */
+  const copyCityPost = () =>
+    cityIndex !== null &&
+    copyForCity(cityPost(cities[cityIndex], list.map((x) => x.store), campaign, cityUrl()), 'Текст скопирован — вставьте его в пост')
 
   const selected = selectedId ? stores.find((s) => s.id === selectedId) : undefined
   const cityTotal = cityIndex !== null ? filtered.filter((s) => s.c === cityIndex).length : 0
@@ -364,13 +369,22 @@ export function Finder({ data, now, phase }: Props) {
               {cityTotal > 6 && (
                 <input type="search" value={street} placeholder="Улица" aria-label="Фильтр по улице" onChange={(e) => { setStreet(e.target.value); setShown(PAGE) }} />
               )}
-              <button type="button" className="button button--small" onClick={copyCityLink}>
-                Ссылка на город
-              </button>
-              <button type="button" className="button button--small" onClick={downloadCity} title="Список магазинов города с понятными адресами">
-                Скачать список
-              </button>
-              {linkNote && <span className="card__note">{linkNote}</span>}
+              <div className="list__links">
+                <button type="button" onClick={copyCityLink} title="Ссылка, по которой сразу откроется этот город">
+                  Ссылка на город
+                </button>
+                <button type="button" onClick={copyCityPost} title="Готовое объявление для соцсетей: адреса, время и ссылка на карту">
+                  Текст для поста
+                </button>
+                <button type="button" onClick={downloadCity} title="Список магазинов города с понятными адресами">
+                  Скачать список
+                </button>
+              </div>
+              {linkNote && (
+                <span className="card__note" role="status">
+                  {linkNote}
+                </span>
+              )}
             </div>
           )}
 
@@ -451,7 +465,7 @@ function StoreCard({ store, km, data, now, selected, showCity, onSelect }: CardP
       )}
 
       <div className="card__actions">
-        <a className="button button--small" href={routeUrl(store, city)} target="_blank" rel="noreferrer">
+        <a className="button button--small button--route" href={routeUrl(store, city)} target="_blank" rel="noreferrer">
           Маршрут
         </a>
         {status.kind !== 'done' && (
@@ -462,11 +476,20 @@ function StoreCard({ store, km, data, now, selected, showCity, onSelect }: CardP
         <button type="button" className="button button--small" onClick={onShare}>
           Поделиться
         </button>
-        <a className="button button--small" href={`?view=poster&store=${store.id}`} title="Листовка на дверь магазина с QR-кодом">
-          Плакат
+        <a className="button button--small button--icon" href={`?view=poster&store=${store.id}`} title="Плакат на дверь магазина с QR-кодом" aria-label="Плакат на дверь магазина с QR-кодом">
+          <svg viewBox="0 0 20 20" width="18" height="18" aria-hidden>
+            <path
+              fill="currentColor"
+              d="M2 2h7v7H2V2Zm2 2v3h3V4H4Zm7-2h7v7h-7V2Zm2 2v3h3V4h-3ZM2 11h7v7H2v-7Zm2 2v3h3v-3H4Zm7-2h3v3h-3v-3Zm4 0h3v2h-3v-2Zm-1 4h2v3h-2v-3Zm-3 1h2v2h-2v-2Zm6-1h1v3h-3v-1h2v-2Z"
+            />
+          </svg>
         </a>
-        {note && <span className="card__note">{note}</span>}
       </div>
+      {note && (
+        <p className="card__note" role="status">
+          {note}
+        </p>
+      )}
     </article>
   )
 }

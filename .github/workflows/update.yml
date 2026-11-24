@@ -1,0 +1,71 @@
+# Обновляет сайт к новой акции без программиста.
+# Вкладка Actions → «Новая таблица акции» → Run workflow → вставить ссылку на Google-таблицу и месяц акции.
+# Дальше всё само: таблица скачивается и проверяется, для новых адресов ищутся координаты,
+# результат сохраняется в репозиторий, сайт пересобирается и публикуется.
+name: Новая таблица акции
+
+on:
+  workflow_dispatch:
+    inputs:
+      sheet:
+        description: Ссылка на Google-таблицу со списком магазинов (доступ «все, у кого есть ссылка»)
+        required: true
+      month:
+        description: Месяц акции в виде ГГГГ-ММ, например 2026-12
+        required: true
+      news:
+        description: Ссылка на новость фонда об акции (необязательно)
+        required: false
+
+permissions:
+  contents: write
+  actions: write
+
+concurrency:
+  group: update-table
+  cancel-in-progress: false
+
+jobs:
+  update:
+    runs-on: ubuntu-latest
+    timeout-minutes: 180
+    env:
+      # значения из формы передаются через переменные окружения, а не подставляются в команды
+      SHEET: ${{ inputs.sheet }}
+      MONTH: ${{ inputs.month }}
+      NEWS: ${{ inputs.news }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - name: Скачать и проверить таблицу
+        run: |
+          if [ -n "$NEWS" ]; then
+            node scripts/fetch-table.mjs --url "$SHEET" --id "$MONTH" --news "$NEWS"
+          else
+            node scripts/fetch-table.mjs --url "$SHEET" --id "$MONTH"
+          fi
+      - name: Найти координаты новых адресов
+        run: npm run data:geocode
+      - name: Собрать данные для сайта
+        run: npm run data:build
+      - run: npm test
+      - name: Сохранить в репозиторий
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data public/data
+          if git diff --cached --quiet; then
+            echo "Таблица не изменилась — сохранять нечего."
+          else
+            git commit -m "Таблица акции $MONTH"
+            git push
+          fi
+      - name: Опубликовать сайт
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ github.ref_name }}
+        run: gh workflow run pages.yml --ref "$BRANCH"

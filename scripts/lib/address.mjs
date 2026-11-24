@@ -25,6 +25,9 @@ const STREET_TYPES = {
   'тер.': ['', ''],
 }
 
+/** название, которое само заканчивается типом улицы: «Тульское шоссе», «Сибирский тракт» */
+const OWN_TYPE_RE = /\s(шоссе|тракт|проспект|бульвар|переулок|проезд|набережная|площадь|дорога|аллея)$/i
+
 /** тип населённого пункта → [префикс для показа, слово для геокодера] */
 const SETTLEMENT_TYPES = {
   'г.': ['', ''],
@@ -238,7 +241,8 @@ export function parseAddress(raw) {
     }
 
     if (street) {
-      const [short, full] = street.type
+      // «Тульское шоссе ул.» — тип уже есть в самом названии, «улица» тут лишняя
+      const [short, full] = street.type[1] === 'улица' && OWN_TYPE_RE.test(street.name) ? ['', ''] : street.type
       const nameFirst = ADJECTIVE_RE.test(street.name.split(' ').pop()) || /^\d+-/.test(street.name)
       const pretty = !short ? street.name : nameFirst ? `${street.name} ${short}` : `${short} ${street.name}`
       const prettyFull = !full ? street.name : nameFirst ? `${street.name} ${full}` : `${full} ${street.name}`
@@ -300,10 +304,11 @@ export function streetVariants(address) {
   const variants = new Set()
   let short = name.replace(/^(им\.?|имени)\s+/i, '')
   variants.add(short)
-  short = short.replace(/^([а-яё]\.\s*)+/i, '')
+  // инициалы и сокращённые имена: «Б.Хмельницкого», «Ст.Разина», «Ю.-Р.Г.Эрвье»
+  short = short.replace(/^([а-яё]{1,2}\.[\s-]*)+/i, '')
   variants.add(short)
   const words = short.split(' ')
-  if (words.length > 1 && !/^\d/.test(short)) variants.add(words[words.length - 1])
+  if (words.length > 1 && !/^\d/.test(short) && !OWN_TYPE_RE.test(short)) variants.add(words[words.length - 1])
   variants.delete(name)
   return [...variants].filter(Boolean).map((v) => [address.streetType, v].filter(Boolean).join(' '))
 }

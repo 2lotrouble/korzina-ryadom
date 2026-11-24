@@ -83,3 +83,59 @@ describe('время проведения', () => {
     expect(short('20, 21 ноября')).toEqual(['11-20 ?-?', '11-21 ?-?'])
   })
 })
+
+describe('ручные правки точек', async () => {
+  const { parseLatLon, parseOverrides } = await import('./overrides.mjs')
+
+  it('понимает координаты, скопированные из карт', () => {
+    expect(parseLatLon('55.751244, 37.618423')).toEqual([55.751244, 37.618423])
+    expect(parseLatLon('55,7512 37,6184')).toEqual([55.7512, 37.6184]) // запятая вместо точки
+    expect(parseLatLon('55.75')).toBeNull()
+    expect(parseLatLon([54.6, 39.7])).toEqual([54.6, 39.7])
+    expect(parseLatLon('54.6; 39.7')).toEqual([54.6, 39.7])
+  })
+
+  it('отбрасывает мусор и невозможные координаты', () => {
+    expect(parseLatLon('')).toBeNull()
+    expect(parseLatLon('где-то в центре')).toBeNull()
+    expect(parseLatLon('155.7, 37.6')).toBeNull()
+    expect(parseOverrides({ 'ул. Ленина, 1': '54.6, 39.7', 'ул. Мира, 2': 'нет' }).size).toBe(1)
+  })
+})
+
+describe('ссылка на таблицу новой акции', async () => {
+  const { csvUrl, parseCampaignId } = await import('./sheet.mjs')
+
+  it('превращает ссылку на Google-таблицу в ссылку на выгрузку', () => {
+    expect(csvUrl('https://docs.google.com/spreadsheets/d/1EN_UUkJ4GrCLz2ytDwN/edit?gid=0#gid=0')).toBe('https://docs.google.com/spreadsheets/d/1EN_UUkJ4GrCLz2ytDwN/export?format=csv&gid=0')
+    expect(csvUrl('https://docs.google.com/spreadsheets/d/abc-DEF_123/')).toBe('https://docs.google.com/spreadsheets/d/abc-DEF_123/export?format=csv')
+    expect(csvUrl('https://docs.google.com/spreadsheets/d/abc/edit#gid=1730')).toContain('gid=1730')
+  })
+
+  it('обычную ссылку на файл не трогает, а не-ссылку отклоняет', () => {
+    expect(csvUrl('https://example.org/stores.csv')).toBe('https://example.org/stores.csv')
+    expect(csvUrl('таблица за декабрь')).toBeNull()
+    expect(csvUrl('')).toBeNull()
+  })
+
+  it('проверяет месяц акции', () => {
+    expect(parseCampaignId('2026-12')).toEqual({ id: '2026-12', year: 2026 })
+    expect(parseCampaignId(' 2027-01 ')).toEqual({ id: '2027-01', year: 2027 })
+    expect(parseCampaignId('декабрь')).toBeNull()
+    expect(parseCampaignId('2026-13')).toBeNull()
+  })
+})
+
+describe('улицы с типом в названии и сокращёнными именами', () => {
+  it('не приписывает «улица» к шоссе и тракту', () => {
+    const a = parseAddress('301841, Тульская обл., Ефремовский р-н, Ефремов г., Тульское шоссе ул., Дом 18, п.1-25')
+    expect(a.pretty).toBe('Тульское шоссе, 18')
+    expect(a.streetFull).toBe('Тульское шоссе')
+    expect(streetVariants(a)).toEqual([])
+  })
+
+  it('убирает сокращённое имя и сложные инициалы', () => {
+    expect(streetVariants(parseAddress('427433, Удмуртская респ., Воткинск г., Ст.Разина ул., Дом 9а'))).toEqual(['улица Разина'])
+    expect(streetVariants(parseAddress('625022, Тюменская обл., Тюмень г., Ю.-Р.Г.Эрвье ул., Дом 22'))).toEqual(['улица Эрвье'])
+  })
+})

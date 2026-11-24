@@ -2,6 +2,8 @@
 // Запуск: npm run data:geocode                      (все адреса; повторный запуск берёт готовое из кэша)
 //         node scripts/geocode.mjs --limit 30        (проба на первых 30 адресах)
 //         node scripts/geocode.mjs --provider photon (выбрать геокодер вручную: photon или nominatim)
+//         node scripts/geocode.mjs --refine          (поискать заново и то, что найдено только до улицы;
+//                                                     результат заменяется, только если стал точнее)
 //
 // Оба геокодера открытые, работают на данных OpenStreetMap и не требуют ключа:
 //   Photon (photon.komoot.io) — быстрый; Nominatim (nominatim.openstreetmap.org) — запасной, не больше запроса в секунду.
@@ -31,6 +33,8 @@ const arg = (name) => {
   return i > 0 ? process.argv[i + 1] : undefined
 }
 const LIMIT = arg('limit') ? Number(arg('limit')) : Infinity
+const REFINE = process.argv.includes('--refine')
+const RANK = { house: 3, street: 2, city: 1 }
 
 const cache = fs.existsSync(CACHE_FILE) ? JSON.parse(fs.readFileSync(CACHE_FILE, 'utf8')) : {}
 let requests = 0
@@ -80,6 +84,7 @@ const fromPhoton = (json) =>
       lat: f.geometry.coordinates[1],
       lon: f.geometry.coordinates[0],
       hn: f.properties.housenumber ?? null,
+      street: f.properties.street ?? (f.properties.type === 'street' ? f.properties.name : null) ?? null,
       isStreet: f.properties.type === 'street' || Boolean(f.properties.street),
       isPlace: f.properties.type !== 'house' && f.properties.type !== 'street',
       name: f.properties.name ?? '',
@@ -93,6 +98,9 @@ const fromNominatim = (json) =>
       lat: Number(r.lat),
       lon: Number(r.lon),
       hn: a.house_number ?? null,
+      street: a.road ?? null,
+      // площадь, микрорайон, квартал: в таблице они часто стоят на месте улицы
+      area: `${r.name ?? ''} ${a.neighbourhood ?? ''} ${a.suburb ?? ''} ${a.quarter ?? ''} ${a.city_block ?? ''}`,
       isStreet: r.category === 'highway' || Boolean(a.road),
       isPlace: r.category === 'place' || r.category === 'boundary',
       name: r.name ?? '',
@@ -141,11 +149,23 @@ const houseDigits = (h) => (norm(h).match(/\d+/) ?? [''])[0]
 /** Населённый пункт для запроса: у Москвы и Петербурга внутренний посёлок точнее, чем сам город */
 const placeName = (address) => bareName(address.isFederalCity && address.locality ? address.locality.split(',')[0] : address.city)
 
+/** Дом с нужным номером мог найтись на другой улице: сверяем главное слово названия. */
+const streetStem = (name) =>
+  norm(name)
+    .split(/[\s.,-]+/)
+    .filter((w) => w.length > 3)
+    .sort((a, b) => b.length - a.length)[0]
+    ?.slice(0, 5) ?? ''
+const sameStreet = (item, address) => {
+  const stem = streetStem(address.streetName)
+  return !item.street || !stem || norm(item.street).includes(stem)
+}
+
 function pickHouse(items, address, check) {
   const wantFull = normHouse(address.house)
   const wantBase = normHouse(address.houseBase)
   const ranked = items
-    .filter((item) => item.hn && check(item))
+    .filter((item) => item.hn && check(item) && sameStreet(item, address))
     .map((item) => {
       const got = normHouse(item.hn)
       return { item, rank: got === wantFull ? 3 : got === wantBase ? 2 : houseDigits(item.hn) === houseDigits(address.houseBase) ? 1 : 0 }
@@ -192,7 +212,7 @@ async function photonStore(address) {
   if (address.streetFull) {
     const q = [address.streetFull, place, address.region].filter(Boolean).join(', ')
     const items = await request('photon', { q, limit: '6', lang: 'default', ...bias }, fromPhoton)
-    const hit = items?.find((x) => x.isStreet && near(x))
+    const hit = items?.find((x) => x.isStreet && near(x) && sameStreet(x, address))
     if (hit) return { lat: hit.lat, lon: hit.lon, precision: 'street' }
   }
   return center ? { ...center, precision: 'city' } : null
@@ -222,7 +242,10 @@ async function nominatimCity(address) {
 }
 
 async function nominatimStore(address) {
-  const inRegion = (item) => sameRegion(item, address.region)
+  // улица с тем же названием и домом бывает в соседнем городе того же региона — сверяем ещё и расстояние до центра города
+  const center = address.city ? await nominatimCity(address) : null
+  const radius = address.isFederalCity ? 70 : 35
+  const inRegion = (item) => sameRegion(item, address.region) && (!center || distanceKm(center, item) <= radius)
 
   if (address.streetFull) {
     // Nominatim ждёт «номер дома, затем улица»; если дома нет в OpenStreetMap, он сам вернёт улицу
@@ -257,8 +280,47 @@ async function nominatimStore(address) {
     if (hit) return { lat: hit.lat, lon: hit.lon, precision: 'house' }
   }
 
-  const center = address.city ? await nominatimCity(address) : null
+  if (center) {
+    const loose = await nominatimLoose(address, center)
+    if (loose) return loose
+  }
   return center ? { ...center, precision: 'city' } : null
+}
+
+/**
+ * Последняя попытка перед «только город»: строка «город, улица, дом» без региона.
+ * Выручает, когда регион на карте записан иначе, чем в таблице (Саров стоит в Нижегородской области,
+ * а на карте относится к Мордовии), когда вместо улицы — площадь или микрорайон, и когда магазин стоит
+ * в деревне, приписанной к городу. Регион не сверяем, зато требуем, чтобы точка была рядом с центром города,
+ * а название улицы или места совпало.
+ */
+async function nominatimLoose(address, center) {
+  const stem = streetStem(address.streetName ?? address.streetFull)
+  const nearCity = (item) => distanceKm(center, item) <= (address.isFederalCity ? 60 : 30)
+  const named = (item) => Boolean(stem) && norm(`${item.street ?? ''} ${item.area ?? ''}`).includes(stem)
+  const house = address.house ? address.house.replace(/корп\.\s*/, 'к').replace(/\s+/g, '') : null
+
+  if (address.streetFull) {
+    for (const street of new Set([address.streetFull, ...streetVariants(address)])) {
+      const q = [bareName(address.city), street, house].filter(Boolean).join(', ')
+      const items = await request('nominatim', { ...NOMINATIM_BASE, q }, fromNominatim)
+      if (!items) continue
+      const exact = address.houseBase ? pickHouse(items, address, (item) => nearCity(item) && named(item)) : null
+      if (exact) return { lat: exact.lat, lon: exact.lon, precision: 'house' }
+      const place = items.find((item) => nearCity(item) && named(item))
+      if (place) return { lat: place.lat, lon: place.lon, precision: 'street' }
+    }
+    return null
+  }
+
+  // улицы нет, есть только деревня или посёлок при городе: «Сергиев Посад г., Березняки д., Дом 110а»
+  const village = bareName(address.locality?.split(',')[0])
+  if (!village) return null
+  const villageStem = streetStem(village)
+  const q = [village, bareName(address.city), address.region].filter(Boolean).join(', ')
+  const items = await request('nominatim', { ...NOMINATIM_BASE, q }, fromNominatim)
+  const hit = items?.find((item) => item.isPlace && nearCity(item) && Boolean(villageStem) && norm(item.name).includes(villageStem))
+  return hit ? { lat: hit.lat, lon: hit.lon, precision: 'street' } : null
 }
 
 // ——— запуск ———
@@ -289,7 +351,7 @@ console.log(`Адресов: ${parsed.length}. Геокодер: ${providerName}
 
 // уже найденное с точностью до дома или улицы не ищем заново — так можно докручивать результат несколькими запусками
 const out = fs.existsSync(OUT_FILE) ? JSON.parse(fs.readFileSync(OUT_FILE, 'utf8')) : {}
-const todo = parsed.filter(({ raw }) => !out[raw] || out[raw].precision === 'city')
+const todo = parsed.filter(({ raw }) => !out[raw] || out[raw].precision === 'city' || (REFINE && out[raw].precision === 'street'))
 const stat = { house: 0, street: 0, city: 0, none: 0 }
 const write = () => fs.writeFileSync(OUT_FILE, JSON.stringify(out, null, 1))
 console.log(`Уже найдено точно: ${parsed.length - todo.length}, осталось: ${todo.length}.`)
@@ -297,7 +359,9 @@ console.log(`Уже найдено точно: ${parsed.length - todo.length}, �
 let done = 0
 await pool(todo, PROVIDERS[providerName].workers, async ({ raw, address }) => {
   const hit = await findStore(address)
-  if (hit) {
+  // дом, найденный в стороне от уже известной улицы, — скорее всего тёзка из соседнего посёлка
+  const farFromStreet = hit && out[raw]?.precision === 'street' && distanceKm(hit, out[raw]) > 8
+  if (hit && !farFromStreet && (!out[raw] || RANK[hit.precision] > RANK[out[raw].precision])) {
     out[raw] = { lat: Number(hit.lat.toFixed(6)), lon: Number(hit.lon.toFixed(6)), precision: hit.precision }
     stat[hit.precision]++
   } else if (!out[raw]) {
@@ -311,4 +375,4 @@ await pool(todo, PROVIDERS[providerName].workers, async ({ raw, address }) => {
 
 write()
 saveCache()
-console.log(`Готово. До дома: ${stat.house}, до улицы: ${stat.street}, до города: ${stat.city}, не найдено: ${stat.none}. Сбоев сети: ${failures}.`)
+console.log(`Готово. Стало точнее — до дома: ${stat.house}, до улицы: ${stat.street}, до города: ${stat.city}; не найдено: ${stat.none}. Сбоев сети: ${failures}.`)
