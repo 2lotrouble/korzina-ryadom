@@ -8,6 +8,8 @@ export interface MapFocus {
   key: string
   points: LatLon[]
   maxZoom?: number
+  /** не отдалять сильнее: выбранный город должен показывать магазины, а не кружок с числом */
+  minZoom?: number
 }
 
 export interface CityBubble extends LatLon {
@@ -30,7 +32,7 @@ interface Props {
 
 export const CHAIN_COLOR: Record<ChainCode, string> = { p: '#e4572e', x: '#1f8a4c' }
 /** с этого масштаба видны отдельные магазины */
-const STORE_ZOOM = 10
+export const STORE_ZOOM = 9
 const RUSSIA: L.LatLngBoundsExpression = [
   [43, 28],
   [62, 105],
@@ -152,7 +154,8 @@ export function MapView({ stores, cities, statusOf, selectedId, onSelect, onCity
     if (!m || !focus || !focus.points.length) return
     m.invalidateSize()
     const bounds = L.latLngBounds(focus.points.map((p) => [p.lat, p.lon] as [number, number]))
-    m.flyToBounds(bounds, { padding: [48, 48], maxZoom: focus.maxZoom ?? 15, duration: 0.6 })
+    const fit = Math.min(m.getBoundsZoom(bounds, false, L.point(96, 96)), focus.maxZoom ?? 15)
+    m.flyTo(bounds.getCenter(), Math.max(fit, focus.minZoom ?? 0), { duration: 0.6 })
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus?.key])
 

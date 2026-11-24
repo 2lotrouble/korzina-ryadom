@@ -289,3 +289,21 @@ export function parseAddress(raw) {
 
 /** ключ для группировки магазинов по городу */
 export const cityKey = (a) => lower(`${a.region ?? ''}|${a.city ?? ''}`)
+
+/**
+ * Другие способы назвать ту же улицу. В таблице — «Алексея Кузнецова ул.», «Б.Хмельницкого пр-кт», «им Ленина пр-кт»,
+ * а на карте чаще «улица Кузнецова», «проспект Хмельницкого», «проспект Ленина».
+ */
+export function streetVariants(address) {
+  const name = address.streetName
+  if (!name) return []
+  const variants = new Set()
+  let short = name.replace(/^(им\.?|имени)\s+/i, '')
+  variants.add(short)
+  short = short.replace(/^([а-яё]\.\s*)+/i, '')
+  variants.add(short)
+  const words = short.split(' ')
+  if (words.length > 1 && !/^\d/.test(short)) variants.add(words[words.length - 1])
+  variants.delete(name)
+  return [...variants].filter(Boolean).map((v) => [address.streetType, v].filter(Boolean).join(' '))
+}

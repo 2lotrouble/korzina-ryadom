@@ -12,7 +12,7 @@ import fs from 'node:fs'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { readStoreRows } from './lib/csv.mjs'
-import { parseAddress, cityKey } from './lib/address.mjs'
+import { parseAddress, cityKey, streetVariants } from './lib/address.mjs'
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..')
 const config = JSON.parse(fs.readFileSync(path.join(ROOT, 'data/campaign.config.json'), 'utf8'))
@@ -155,24 +155,6 @@ function pickHouse(items, address, check) {
   return ranked[0]?.item ?? null
 }
 
-/**
- * Другие способы назвать ту же улицу. В таблице — «Алексея Кузнецова ул.», «Б.Хмельницкого пр-кт», «им Ленина пр-кт»,
- * а на карте чаще «улица Кузнецова», «проспект Хмельницкого», «проспект Ленина».
- */
-export function streetVariants(address) {
-  const name = address.streetName
-  if (!name) return []
-  const variants = new Set()
-  let short = name.replace(/^(им\.?|имени)\s+/i, '')
-  variants.add(short)
-  short = short.replace(/^([а-яё]\.\s*)+/i, '')
-  variants.add(short)
-  const words = short.split(' ')
-  if (words.length > 1 && !/^\d/.test(short)) variants.add(words[words.length - 1])
-  variants.delete(name)
-  return [...variants].filter(Boolean).map((v) => [address.streetType, v].filter(Boolean).join(' '))
-}
-
 // ——— Photon: сначала центр города, потом дом рядом с ним ———
 
 const photonCenters = new Map()
@@ -223,8 +205,9 @@ const nominatimCenters = new Map()
 
 function nominatimPlace(address) {
   const fields = { city: placeName(address) }
-  if (address.region && !address.isFederalCity) fields.state = address.region
-  if (address.isFederalCity && address.locality) fields.state = address.region
+  // на карте округа названы полностью: «Ханты-Мансийский автономный округ», а не «АО»
+  const state = address.region?.replace(/ АО$/, ' автономный округ')
+  if (state && (!address.isFederalCity || address.locality)) fields.state = state
   return fields
 }
 
@@ -264,6 +247,16 @@ async function nominatimStore(address) {
     }
     if (fallback) return fallback
   }
+  if (address.houseBase) {
+    // последняя попытка — запрос одной строкой: так находятся дома без улицы («пос. Развилка, 33», «Зеленоград, к1508»)
+    const where = address.streetFull ?? bareName(address.locality?.split(',')[0])
+    const house = (address.house ?? address.houseBase).replace(/корп\.\s*/, 'к')
+    const q = [[where, house].filter(Boolean).join(' '), bareName(address.city), address.region].filter(Boolean).join(', ')
+    const items = await request('nominatim', { ...NOMINATIM_BASE, q }, fromNominatim)
+    const hit = items && pickHouse(items, address, inRegion)
+    if (hit) return { lat: hit.lat, lon: hit.lon, precision: 'house' }
+  }
+
   const center = address.city ? await nominatimCity(address) : null
   return center ? { ...center, precision: 'city' } : null
 }

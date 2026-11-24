@@ -46,8 +46,8 @@ for (const { row, address } of parsed) {
     stats.noTime++
   }
 
-  const geo = geocoded[row.address]
-  stats[geo?.precision ?? 'none']++
+  const geo = geocoded[row.address] ? { ...geocoded[row.address] } : undefined
+  city.federal = address.isFederalCity
   if (geo && geo.precision !== 'city') city.points.push(geo)
   if (geo?.precision === 'city') city.center = { lat: geo.lat, lon: geo.lon }
 
@@ -65,6 +65,34 @@ for (const { row, address } of parsed) {
     raw: row.address,
   })
 }
+
+// Проверка геокодера: магазин не может стоять в десятках километров от остальных магазинов своего города.
+// Такое бывает, когда улица с тем же названием нашлась в соседнем посёлке. Сомнительные точки переносим в центр города
+// и помечаем как примерные — лучше честно показать «место примерное», чем отправить человека не туда.
+function distanceKm(a, b) {
+  const rad = Math.PI / 180
+  const dLat = (b.lat - a.lat) * rad
+  const dLon = (b.lon - a.lon) * rad
+  const h = Math.sin(dLat / 2) ** 2 + Math.cos(a.lat * rad) * Math.cos(b.lat * rad) * Math.sin(dLon / 2) ** 2
+  return 12742 * Math.asin(Math.sqrt(h))
+}
+const median = (values) => [...values].sort((x, y) => x - y)[Math.floor(values.length / 2)]
+stats.moved = 0
+for (const city of cities.values()) {
+  if (city.points.length < 3) continue
+  const middle = { lat: median(city.points.map((p) => p.lat)), lon: median(city.points.map((p) => p.lon)) }
+  const limit = city.federal ? 70 : 35
+  for (const point of city.points) {
+    if (distanceKm(middle, point) <= limit) continue
+    point.lat = middle.lat
+    point.lon = middle.lon
+    point.precision = 'city'
+    stats.moved++
+  }
+  city.points = city.points.filter((p) => p.precision !== 'city')
+  city.center ??= middle
+}
+for (const s of stores) stats[s.geo?.precision ?? 'none']++
 
 // центр города: среднее по точно найденным магазинам, иначе то, что вернул геокодер
 const cityList = [...cities.entries()]
@@ -126,6 +154,6 @@ fs.copyFileSync(path.join(ROOT, config.csv), path.join(ROOT, 'public/data/table.
 
 console.log(`Магазинов: ${stats.total}, городов: ${cityList.length}, дни акции: ${dates.join(', ')}`)
 console.log(`Координаты: до дома ${stats.house}, до улицы ${stats.street}, до города ${stats.city}, не найдено ${stats.none}`)
-console.log(`Без времени: ${stats.noTime}, с непонятной датой: ${stats.noSlots}`)
+console.log(`Без времени: ${stats.noTime}, с непонятной датой: ${stats.noSlots}, перенесено в центр города как сомнительные: ${stats.moved}`)
 for (const p of problems) console.log('  ! ' + p)
 console.log(`Записано: ${path.relative(ROOT, outFile)} (${Math.round(fs.statSync(outFile).size / 1024)} КБ)`)

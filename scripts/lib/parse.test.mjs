@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest'
-import { parseAddress } from './address.mjs'
+import { parseAddress, streetVariants } from './address.mjs'
 import { parseSlots } from './slots.mjs'
 
 describe('адреса из таблицы фонда', () => {
@@ -39,6 +39,23 @@ describe('адреса из таблицы фонда', () => {
   it('сокращает длинные названия регионов', () => {
     expect(parseAddress('628400, Ханты-Мансийский Автономный округ - Югра АО, Сургут г., Ленина пр-кт, Дом 9а').region).toBe('Ханты-Мансийский АО')
     expect(parseAddress('Кемеровская область - Кузбасс обл, Кемерово г., Ленина пр-кт, Дом 1').region).toBe('Кемеровская область')
+  })
+})
+
+describe('запасные названия улиц для геокодера', () => {
+  const variants = (raw) => streetVariants(parseAddress(raw))
+
+  it('убирает имя перед фамилией', () => {
+    expect(variants('Новгородская обл., Боровичи г., Алексея Кузнецова ул., Дом 64')).toEqual(['улица Кузнецова'])
+  })
+  it('убирает инициалы', () => {
+    expect(variants('Белгородская обл., Белгород г., Б.Хмельницкого пр-кт, Дом 80а')).toEqual(['проспект Хмельницкого'])
+  })
+  it('убирает «им»', () => {
+    expect(variants('Волгоградская обл., Волжский г., им Ленина пр-кт, Дом 97')).toEqual(['проспект Ленина'])
+  })
+  it('не трогает обычные названия', () => {
+    expect(variants('Рязанская обл., Рязань г., Мервинская ул., Дом 2б')).toEqual([])
   })
 })
 

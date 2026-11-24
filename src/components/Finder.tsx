@@ -3,7 +3,7 @@ import { CHAIN_NAME, distanceKm, formatDistance, hasPoint, norm, plural, type Ch
 import { buildIcs, downloadFile, routeUrl, share, storeUrl } from '../lib/links'
 import { findPlace } from '../lib/place'
 import { dayOfMonth, formatDate, formatSlotTime, monthName, storeStatus, weekdayShort, type Now, type Phase } from '../lib/time'
-import { CHAIN_COLOR, MapView, type CityBubble, type MapFocus } from './MapView'
+import { CHAIN_COLOR, MapView, STORE_ZOOM, type CityBubble, type MapFocus } from './MapView'
 
 type GeoState = 'idle' | 'loading' | 'denied' | 'failed' | 'searching' | 'nothing'
 const PAGE = 12
@@ -101,7 +101,7 @@ export function Finder({ data, now, phase }: Props) {
     [cities],
   )
 
-  const focusOn = (key: string, points: LatLon[], maxZoom?: number) => points.length && setFocus({ key, points, maxZoom })
+  const focusOn = (key: string, points: LatLon[], maxZoom?: number) => points.length && setFocus({ key, points, maxZoom, minZoom: STORE_ZOOM })
 
   function chooseCity(index: number) {
     const city = cities[index]
@@ -188,6 +188,8 @@ export function Finder({ data, now, phase }: Props) {
     const id = params.get('store')
     const store = id && stores.find((s) => s.id === id)
     const cityName = params.get('city')
+    // по ссылке на город или магазин человек должен сразу увидеть поиск, а не первый экран
+    if ((id || cityName) && !location.hash) requestAnimationFrame(() => document.getElementById('find')?.scrollIntoView())
     if (!store && cityName) {
       // ссылка на город: ?city=Рязань — удобно для постов региональных НКО
       const matches = cities.map((city, i) => ({ city, i })).filter((x) => norm(x.city.name) === norm(cityName))

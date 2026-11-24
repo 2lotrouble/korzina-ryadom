@@ -35,7 +35,7 @@ export interface Campaign {
   newsUrl: string
   dates: string[]
   generatedAt: string
-  stats: { total: number; house: number; street: number; city: number; none: number; noTime: number; noSlots: number }
+  stats: { total: number; house: number; street: number; city: number; none: number; noTime: number; noSlots: number; moved?: number }
 }
 
 export interface Data {

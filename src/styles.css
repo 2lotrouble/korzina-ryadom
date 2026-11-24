@@ -107,6 +107,11 @@ main,
   display: flex;
   gap: 4px;
   overflow-x: auto;
+  scrollbar-width: none;
+}
+
+.top nav::-webkit-scrollbar {
+  display: none;
 }
 
 .top nav a {
@@ -1581,6 +1586,17 @@ code {
 
 /* тонкие белые швы между плитками карты на дробном масштабе экрана */
 .leaflet-tile-container img {
-  width: 256.5px !important;
-  height: 256.5px !important;
+  mix-blend-mode: plus-lighter;
+}
+
+@media (max-width: 560px) {
+  .map__legend {
+    font-size: 11px;
+    gap: 2px 10px;
+    padding: 5px 8px;
+  }
+
+  .map__legend span:nth-child(n + 3) {
+    display: none;
+  }
 }
